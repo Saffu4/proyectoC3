@@ -67,6 +67,13 @@ export default function Camera() {
               }}
             />
           </div>
+          <p className="text-xs text-slate-500">
+            Caja <span className="text-green-700 font-semibold">verde con el nombre</span>: rostro
+            reconocido y con acceso. Caja <span className="text-red-700 font-semibold">roja</span>:
+            desconocido o sin permiso (suspendido/revocado/vencido/sin rol). El número entre
+            paréntesis es la distancia LBPH (menor = más cercano). Esta vista es informativa; el
+            registro de accesos se genera al pulsar "Comprobar acceso ahora".
+          </p>
           <div className="flex gap-2">
             <button
               onClick={checkNow}

@@ -14,6 +14,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from . import access_service, auth, camera, capture_service, config, db, event_service, sync_service
 from . import capture_session
+from . import preview_overlay
 from .access_service import AccessDecision
 from .camera import CameraDisconnectedError
 from .face_detector import FaceDetector
@@ -487,9 +488,11 @@ def camera_stream():
                     # sin partes de texto: el navegador rompería el MJPEG
                     time.sleep(0.5)
                     continue
-                for (x, y, w, h) in detector.detect(frame):
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 0), 2)
-                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                faces = detector.detect(frame)
+                annotated, _results = preview_overlay.annotate_frame(
+                    frame, faces, get_recognizer()
+                )
+                ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                 if ok:
                     yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
                 time.sleep(0.08)
