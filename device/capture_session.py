@@ -94,12 +94,15 @@ class CaptureSession:
     # ------------------------------------------------------------------ preview
 
     def read_preview(self) -> np.ndarray | None:
-        with self._lock:
-            frame = self._preview
-        if frame is None:
+        try:
+            with self._lock:
+                frame = self._preview
+            if frame is None:
+                return None
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 72])
+            return buf.tobytes() if ok else None  # type: ignore[return-value]
+        except Exception:
             return None
-        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 72])
-        return buf.tobytes() if ok else None  # type: ignore[return-value]
 
     def _annotate(self, frame: np.ndarray, rect, sharp: bool) -> np.ndarray:
         out = frame.copy()
@@ -122,45 +125,71 @@ class CaptureSession:
             return
 
         deadline = self.created_at + 180.0  # timeout duro de sesión
-        while not self._stop.is_set() and time.time() < deadline:
-            try:
-                frame = camera.get_source().read()
-            except camera.CameraDisconnectedError as exc:
-                self._finish("error", f"Cámara: {exc}")
-                return
+        try:
+            while not self._stop.is_set() and time.time() < deadline:
+                self._iteration(detector)
+                if self._check_finished():
+                    return
+                time.sleep(max(0.05, config.CAPTURE_PACE_SECONDS))
+        except Exception as exc:  # NUNCA dejar el hilo mudo: el modal se colgaría
+            self._finish("error", f"Error en captura: {type(exc).__name__}: {exc}")
+            return
 
-            faces = detector.detect(frame)
-            faces = sorted(faces, key=lambda c: c[2] * c[3], reverse=True)
-            rect = faces[0] if faces else None
+        if self.saved >= self.target:
+            self._finish("done")
+        elif self._stop.is_set():
+            self._finish("cancelled")
+        else:
+            self._finish("cancelled", f"Tiempo agotado con {self.saved}/{self.target} capturados")
 
-            can_save = False
-            gray_mean = 0.0
-            blur_score = 0.0
-            if rect:
-                (x, y, w, h) = rect
-                roi_gray = cv2.cvtColor(frame[y : y + h, x : x + w], cv2.COLOR_BGR2GRAY)
-                gray_mean = float(roi_gray.mean())
-                blur_score = float(cv2.Laplacian(roi_gray, cv2.CV_64F).var())
-                can_save = (
-                    w >= FACE_MIN_W
-                    and gray_mean >= BRIGHT_MIN
-                    and blur_score >= BLUR_MIN
-                )
-            self.guidance = _recent_guidance(
-                face=rect is not None,
-                sharp=blur_score >= BLUR_MIN,
-                bright_ok=gray_mean >= BRIGHT_MIN,
-                close_ok=rect is None or rect[2] >= FACE_MIN_W,
+    def _check_finished(self) -> bool:
+        finish_now = False
+        with self._lock:
+            finish_now = getattr(self, "_want_done", False)
+        if finish_now:
+            self._finish("done")
+            return True
+        return False
+
+    def _iteration(self, detector: FaceDetector) -> None:
+        try:
+            frame = camera.get_source().read()
+        except camera.CameraDisconnectedError as exc:
+            raise RuntimeError(f"Cámara: {exc}") from exc
+
+        faces = detector.detect(frame)
+        faces = sorted(faces, key=lambda c: c[2] * c[3], reverse=True)
+        rect = faces[0] if faces else None
+
+        can_save = False
+        gray_mean = 0.0
+        blur_score = 0.0
+        if rect:
+            (x, y, w, h) = rect
+            x2, y2 = min(frame.shape[1], x + w), min(frame.shape[0], y + h)
+            roi_gray = cv2.cvtColor(frame[y:y2, x:x2], cv2.COLOR_BGR2GRAY)
+            gray_mean = float(roi_gray.mean())
+            blur_score = float(cv2.Laplacian(roi_gray, cv2.CV_64F).var())
+            can_save = (
+                w >= FACE_MIN_W
+                and gray_mean >= BRIGHT_MIN
+                and blur_score >= BLUR_MIN
             )
+        self.guidance = _recent_guidance(
+            face=rect is not None,
+            sharp=blur_score >= BLUR_MIN,
+            bright_ok=gray_mean >= BRIGHT_MIN,
+            close_ok=rect is None or rect[2] >= FACE_MIN_W,
+        )
 
-            # guardar tomas válidas al ritmo del base (~0.4 s entre guardados)
-            if can_save:
-                (x, y, w, h) = rect
-                margen_x = int(w * config.FACE_MARGIN)
-                margen_y = int(h * config.FACE_MARGIN)
-                H, W = frame.shape[:2]
-                x1, y1 = max(0, x - margen_x), max(0, y - margen_y)
-                x2, y2 = min(W, x + w + margen_x), min(H, y + h + margen_y)
+        if can_save:
+            (x, y, w, h) = rect
+            margen_x = int(w * config.FACE_MARGIN)
+            margen_y = int(h * config.FACE_MARGIN)
+            H, W = frame.shape[:2]
+            x1, y1 = max(0, x - margen_x), max(0, y - margen_y)
+            x2, y2 = min(W, x + w + margen_x), min(H, y + h + margen_y)
+            if x2 > x1 and y2 > y1:  # recorte nunca vacío
                 face_img = load_face_to_train(frame[y1:y2, x1:x2])
                 folder = config.faces_dir(self.person_id)
                 config.ensure_data_dirs()
@@ -173,23 +202,9 @@ class CaptureSession:
                     if self.saved >= self.target:
                         self._want_done = True
 
-            annotated = self._annotate(frame, rect, sharp=blur_score >= BLUR_MIN)
-            finish_now = False
-            with self._lock:
-                self._preview = annotated
-                finish_now = getattr(self, "_want_done", False)
-            if finish_now:
-                self._finish("done")
-                return
-
-            time.sleep(max(0.05, config.CAPTURE_PACE_SECONDS))
-
-        if self.saved >= self.target:
-            self._finish("done")
-        elif self._stop.is_set():
-            self._finish("cancelled")
-        else:
-            self._finish("cancelled", f"Tiempo agotado con {self.saved}/{self.target} capturados")
+        annotated = self._annotate(frame, rect, sharp=blur_score >= BLUR_MIN)
+        with self._lock:
+            self._preview = annotated
 
 
 _registry: dict[str, CaptureSession] = {}

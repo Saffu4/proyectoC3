@@ -379,15 +379,22 @@ def capture_preview(session_id: str):
         return _error("Sesión no encontrada", 404, "not_found")
 
     def gen():
-        while ses.status == "running" or (ses.status in ("done", "cancelled", "error") and time.time() < getattr(gen, "end", 0)):
-            data = ses.read_preview()
-            if data:
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n"
-            else:
-                yield b"--frame\r\nContent-Type: text/plain\r\n\r\npreparing preview\r\n"
-            time.sleep(0.08)
+        # SOLO partes image/jpeg: los navegadores (Chrome) rompen el MJPEG
+        # si mezclan text/plain en el multipart. Sin fotograma aún → no se
+        # emite parte, solo se espera.
+        try:
+            drained_end = time.time() + 10  # la vista queda congelada unos s tras terminar
+            while (
+                ses.status == "running"
+                or (ses.status in ("done", "cancelled", "error") and time.time() < drained_end)
+            ):
+                data = ses.read_preview()
+                if data:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n"
+                time.sleep(0.08 if data else 0.25)
+        except (GeneratorExit, ConnectionResetError, BrokenPipeError, OSError):
+            return  # el cliente cerró la vista (modal cerrado/recarga)
 
-    gen.end = time.time() + 12  # la vista permanece unos segundos tras terminar
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
@@ -472,19 +479,22 @@ def camera_stream():
 
     def gen():
         detector = _detector or FaceDetector()
-        while True:
-            try:
-                frame = camera.get_source().read()
-            except CameraDisconnectedError:
-                yield b"--frame\r\nContent-Type: text/plain\r\n\r\ncamera offline\r\n"
-                time.sleep(0.5)
-                continue
-            for (x, y, w, h) in detector.detect(frame):
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 0), 2)
-            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            if ok:
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
-            time.sleep(0.08)
+        try:
+            while True:
+                try:
+                    frame = camera.get_source().read()
+                except CameraDisconnectedError:
+                    # sin partes de texto: el navegador rompería el MJPEG
+                    time.sleep(0.5)
+                    continue
+                for (x, y, w, h) in detector.detect(frame):
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 0), 2)
+                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                if ok:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+                time.sleep(0.08)
+        except (GeneratorExit, ConnectionResetError, BrokenPipeError, OSError):
+            return  # el cliente cerró la vista
 
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
