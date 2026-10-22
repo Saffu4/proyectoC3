@@ -1,4 +1,4 @@
-import { Navigate, Outlet, useLocation } from "react-router-dom";
+import { Navigate, Outlet } from "react-router-dom";
 import { GitBranch, LogOut } from "lucide-react";
 import { useAuth } from "../services/auth";
 
@@ -6,7 +6,7 @@ export function ProtectedLayout() {
   const auth = useAuth();
 
   if (!auth.token) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    return <Navigate to="/login" replace />;
   }
 
   return (

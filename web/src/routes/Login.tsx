@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useState, FormEvent } from "react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "../services/auth";

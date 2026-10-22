@@ -6,16 +6,20 @@ import functools
 import secrets
 import time
 import uuid
+from pathlib import Path
 from datetime import datetime
 
 import cv2
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 from . import access_service, auth, camera, capture_service, config, db, event_service, sync_service
 from .access_service import AccessDecision
 from .camera import CameraDisconnectedError
 from .face_detector import FaceDetector
 from .face_recognizer import ModelUnavailableError, get_recognizer, invalidate_shared
+
+# Panel web precompilado (device/webapp): TODO en la Pi, sin Node ni Vercel.
+WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = config.FLASK_SECRET
@@ -565,10 +569,31 @@ def kiosk_evaluate():
     ), (200 if decision.granted else 403)
 
 
+# ----------------------------------------------------------------------- SPA
+
+@app.get("/")
+@app.get("/ui/<path:_any>")
+def spa_index():
+    """Panel web (build precompilado). Frontend y API en el mismo origen."""
+    if not (WEBAPP_DIR / "index.html").exists():
+        return _error("Panel web no incluido en esta instalación", 404, "webapp_missing")
+    return send_from_directory(WEBAPP_DIR, "index.html")
+
+
+@app.get("/assets/<path:asset_path>")
+def spa_assets(asset_path: str):
+    if not (WEBAPP_DIR / "assets").exists():
+        return _error("Panel web no incluido en esta instalación", 404, "webapp_missing")
+    return send_from_directory(WEBAPP_DIR / "assets", asset_path, max_age=3600)
+
+
 # ----------------------------------------------------------------------- error app
 
 @app.errorhandler(404)
 def not_found(e):
+    # los errores de página (no API) redirigen al SPA
+    if not request.path.startswith("/api/"):
+        return spa_index()
     return _error("Endpoint no encontrado", 404, "not_found")
 
 

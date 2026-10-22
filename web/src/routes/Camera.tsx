@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { api } from "../services/api";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
 export default function Camera() {
-  const navigate = useNavigate();
   const [enabled, setEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);

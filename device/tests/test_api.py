@@ -208,3 +208,16 @@ def test_audit_log_registra_operaciones(device_env):
     log = c.get("/api/audit-log", headers=auth_header(token)).get_json()
     actions = {row["action"] for row in log}
     assert {"person_create", "person_suspend", "login_ok"}.issubset(actions)
+
+# ---------------------------------------------------------------------- SPA
+
+def test_panel_web_servido_desde_flask(device_env):
+    resp = client().get("/")
+    assert resp.status_code == 200
+    assert b"<div id=\"root\">" in resp.data
+    # rutas SPA que no existen devuelven el index (fallback del Router)
+    resp = client().get("/people/mirar-detalle")
+    assert resp.status_code == 200
+    # endpoints API inexistentes siguen dando JSON 404
+    resp = client().get("/api/no-existe")
+    assert resp.status_code == 404 and resp.is_json

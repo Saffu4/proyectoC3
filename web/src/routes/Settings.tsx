@@ -12,7 +12,9 @@ export default function Settings() {
     api
       .get<Record<string, string>>("/api/settings")
       .then(setSettings, (e) => setError(e.message));
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   async function save(key: string) {
     try {
