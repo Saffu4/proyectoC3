@@ -369,11 +369,34 @@ def access_events():
 
 # ---------------------------------------------------------------------- cámara
 
+@app.post("/api/camera/stream-token")
+@require_admin
+def camera_stream_token():
+    """Emite token efímero (10 min, solo lectura) para el <img> del panel.
+    Falla pronto si la cámara está desconectada o no entrega frames."""
+    camera.get_source().read()
+    tok = auth.issue_stream_token()
+    return jsonify({"token": tok, "ttl_seconds": auth.STREAM_TOKEN_TTL_SECONDS})
+
+
+@app.post("/api/camera/revoke-token")
+@require_admin
+def camera_revoke_token():
+    auth.revoke_stream_tokens()
+    log_audit("stream_token_revoked", None)
+    return jsonify({"ok": True})
+
 
 @app.get("/api/camera/stream")
-@require_admin
 def camera_stream():
-    """MJPEG con autenticación propia; no queda expuesto público."""
+    """MJPEG con autorización PROPIA: sesión admin O token de stream efímero.
+    El <img> del navegador no puede mandar headers; por eso existe el token."""
+    token = request.args.get("t")
+    header = request.headers.get("Authorization", "")
+    session_ok = auth.verify_session(header.removeprefix("Bearer ").strip())
+    if not (session_ok or auth.verify_stream_token(token)):
+        return _error("Flujo de cámara no autorizado", 401, "unauthorized")
+
     def gen():
         detector = _detector or FaceDetector()
         while True:

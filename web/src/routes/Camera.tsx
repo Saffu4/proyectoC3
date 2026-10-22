@@ -4,6 +4,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 
 export default function Camera() {
   const [enabled, setEnabled] = useState(false);
+  const [streamSrc, setStreamSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
   // Comprobación facial manual contra la cámara activa
@@ -55,13 +56,13 @@ export default function Camera() {
       ) : (
         <div className="space-y-4">
           <div className="rounded-xl border bg-black overflow-hidden">
-            {/* cada frame pasa por el servidor Flask, que valida la sesión */}
+            {/* cada frame pasa por el servidor Flask con token efímero */}
             <img
-              src="/api/camera/stream"
+              src={streamSrc ?? ""}
               alt="Cámara en tiempo real"
               className="w-full"
               onError={(e) => {
-                setError("No se pudo leer el flujo de la cámara (¿está conectada?)");
+                setError("No se pudo leer el flujo de la cámara (¿está conectada y libre?)");
                 (e.target as HTMLImageElement).style.display = "none";
               }}
             />
@@ -74,7 +75,11 @@ export default function Camera() {
               Comprobar acceso ahora
             </button>
             <button
-              onClick={() => setEnabled(false)}
+              onClick={() => {
+                setEnabled(false);
+                setStreamSrc(null);
+                api.post("/api/camera/revoke-token").catch(() => {});
+              }}
               className="border rounded-lg px-4 py-2 text-sm"
             >
               Desactivar
@@ -98,10 +103,23 @@ export default function Camera() {
       {confirm && (
         <ConfirmDialog
           title="Activar cámara en vivo"
-          description="Solo se verá en esta sesión autenticada. ¿Continuar?"
-          onConfirm={() => {
+          description="Solo se verá en esta sesión autenticada, con un token efímero de 10 minutos. ¿Continuar?"
+          onConfirm={async () => {
             setConfirm(false);
-            setEnabled(true);
+            setError(null);
+            try {
+              const r = await api.post<{ token: string; ttl_seconds: number }>(
+                "/api/camera/stream-token"
+              );
+              setStreamSrc(`/api/camera/stream?t=${r.token}`);
+              setEnabled(true);
+            } catch (e) {
+              setError(
+                e instanceof Error && e.message
+                  ? `Cámara no disponible: ${e.message}`
+                  : "No se pudo activar la cámara"
+              );
+            }
           }}
           onCancel={() => setConfirm(false)}
         />

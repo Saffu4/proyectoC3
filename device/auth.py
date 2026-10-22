@@ -143,3 +143,48 @@ def logout(token: str | None) -> None:
 
 
 require = verify_session  # alias semántico
+
+# ------------------------- tokens de streaming (MJPEG) -------------------------
+# El <img> del navegador no puede mandar Authorization; se usa un token
+# efímero de SOLO LECTURA para cámar, con expiración corta y revocable.
+
+STREAM_TOKENS: dict[str, datetime] = {}
+_stream_lock = threading.Lock()
+STREAM_TOKEN_TTL_SECONDS = 600
+
+
+def issue_stream_token() -> str:
+    token = secrets.token_urlsafe(24)
+    with _stream_lock:
+        STREAM_TOKENS[token] = (
+            datetime.now(timezone.utc)
+            + timedelta(seconds=STREAM_TOKEN_TTL_SECONDS)
+        )
+        # limpieza de expirados
+        now = datetime.now(timezone.utc)
+        for t, exp in list(STREAM_TOKENS.items()):
+            if now >= exp:
+                STREAM_TOKENS.pop(t, None)
+    db.execute(
+        "INSERT INTO audit_log (action, actor, detail, timestamp) VALUES (?, ?, ?, ?)",
+        ("stream_token_issued", token[:6] + "…", None, db.utcnow_iso()),
+    )
+    return token
+
+
+def verify_stream_token(token: str | None) -> bool:
+    if not token:
+        return False
+    with _stream_lock:
+        exp = STREAM_TOKENS.get(token)
+        if not exp:
+            return False
+        if datetime.now(timezone.utc) >= exp:
+            STREAM_TOKENS.pop(token, None)
+            return False
+    return True
+
+
+def revoke_stream_tokens() -> None:
+    with _stream_lock:
+        STREAM_TOKENS.clear()

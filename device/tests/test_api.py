@@ -67,6 +67,34 @@ def test_stream_camara_requiere_auth(device_env):
     assert resp.status_code == 401
 
 
+def test_stream_con_token_efimero(device_env):
+    from device import auth
+
+    helpers.set_camera_static([helpers.make_test_frame()])  # cámara disponible
+    token = helpers.login_admin(client())
+    c = client()
+    resp = c.post("/api/camera/stream-token", headers=auth_header(token))
+    assert resp.status_code == 200, resp.get_json()
+    bosy_token = resp.get_json()["token"]
+    # el <img> solo puede usar query param: debe ser válido para /stream
+    resp = c.get(f"/api/camera/stream?t={bosy_token}")
+    assert resp.status_code == 200
+    assert resp.mimetype == "multipart/x-mixed-replace"
+    # token inventado → 401
+    resp2 = client().get("/api/camera/stream?t=falso123")
+    assert resp2.status_code == 401
+
+
+def test_stream_token_revocado(device_env):
+    helpers.set_camera_static([helpers.make_test_frame()])
+    token = helpers.login_admin(client())
+    c = client()
+    tok = c.post("/api/camera/stream-token", headers=auth_header(token)).get_json()["token"]
+    resp = c.post("/api/camera/revoke-token", headers=auth_header(token))
+    assert resp.get_json()["ok"]
+    assert c.get(f"/api/camera/stream?t={tok}").status_code == 401
+
+
 def test_camera_desconectada(device_env):
     helpers.set_camera_disconnected()
     with pytest.raises(Exception) as exc_info:
