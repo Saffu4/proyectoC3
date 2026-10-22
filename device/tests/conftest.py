@@ -29,6 +29,11 @@ def device_env(tmp_path, monkeypatch):
     db.init_db()
     auth._attempts.clear()  # el rate-limit de login no debe sangrar entre tests
     yield config
+    # detener sesiones de captura pendientes (evitan hilos vivos entre tests)
+    from device import capture_session
+
+    for s in list(capture_session._registry.values()):
+        s.request_stop()
     camera.set_source(None)
     face_recognizer.invalidate_shared()
     auth.SESSIONS.clear()

@@ -13,6 +13,7 @@ import cv2
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from . import access_service, auth, camera, capture_service, config, db, event_service, sync_service
+from . import capture_session
 from .access_service import AccessDecision
 from .camera import CameraDisconnectedError
 from .face_detector import FaceDetector
@@ -328,8 +329,12 @@ def person_delete(person_id: str):
 @app.post("/api/people/<person_id>/capture")
 @require_admin
 def person_capture(person_id: str):
+    """Captura clásica (bloqueante). Si hay sesión interactiva activa, 409."""
     body = _body_json()
     count = int(body.get("count", 10))
+    for ses in list(capture_session._registry.values()):
+        if ses.status == "running":
+            return _error("Hay una sesión de captura interactiva en curso", 409, "capture_busy")
     try:
         saved = capture_service.capture_faces(person_id, count=count)
     except (capture_service.CaptureError, CameraDisconnectedError) as exc:
@@ -337,6 +342,74 @@ def person_capture(person_id: str):
         return _error(str(exc), 503 if code == "camera_disconnected" else 400, code)
     log_audit("faces_capture", f"id={person_id} saved={saved['saved']}")
     return jsonify(saved), 201
+
+
+@app.post("/api/people/<person_id>/capture-session")
+@require_admin
+def person_capture_session(person_id: str):
+    """Inicia sesión INTERACTIVA con preview en vivo + contador + control de
+    calidad (nitidez/luz/distancia). Devuelve session_id y token de preview."""
+    body = _body_json()
+    target = int(body.get("count", 20))
+    rows = db.query("SELECT status FROM people WHERE id=?", (person_id,))
+    if not rows:
+        return _error("Persona no encontrada", 404, "not_found")
+    if rows[0]["status"] != "active":
+        return _error("Solo se captura de personas activas", 400, "bad_request")
+    try:
+        ses = capture_session.start_session(person_id, target)
+    except capture_session.CaptureBusyError as exc:
+        return _error(str(exc), 409, "capture_busy")
+    return jsonify({"session_id": ses.id, "target": ses.target}), 201
+
+
+@app.get("/api/capture/<session_id>/preview")
+def capture_preview(session_id: str):
+    """MJPEG con caja verde/roja + contador. Auth: sesión admin O t= stream/token/OR token de preview."""
+    token = request.args.get("t")
+    header = request.headers.get("Authorization", "")
+    if not (
+        auth.verify_session(header.removeprefix("Bearer ").strip())
+        or auth.verify_stream_token(token)
+    ):
+        return _error("Preview no autorizado", 401, "unauthorized")
+    try:
+        ses = capture_session.get_session(session_id)
+    except capture_session.SessionNotFoundError:
+        return _error("Sesión no encontrada", 404, "not_found")
+
+    def gen():
+        while ses.status == "running" or (ses.status in ("done", "cancelled", "error") and time.time() < getattr(gen, "end", 0)):
+            data = ses.read_preview()
+            if data:
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n"
+            else:
+                yield b"--frame\r\nContent-Type: text/plain\r\n\r\npreparing preview\r\n"
+            time.sleep(0.08)
+
+    gen.end = time.time() + 12  # la vista permanece unos segundos tras terminar
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/capture/<session_id>/status")
+@require_admin
+def capture_status(session_id: str):
+    try:
+        ses = capture_session.get_session(session_id)
+    except capture_session.SessionNotFoundError as exc:
+        return _error(str(exc), 404, "not_found")
+    return jsonify(ses.snapshot())
+
+
+@app.post("/api/capture/<session_id>/stop")
+@require_admin
+def capture_stop(session_id: str):
+    try:
+        ses = capture_session.get_session(session_id)
+    except capture_session.SessionNotFoundError as exc:
+        return _error(str(exc), 404, "not_found")
+    ses.request_stop()
+    return jsonify({"ok": True})
 
 
 @app.post("/api/people/<person_id>/train")
