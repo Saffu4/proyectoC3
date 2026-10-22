@@ -33,8 +33,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string> | undefined),
   };
-  if (!(options.body && !headers["Content-Type"])) {
-    headers["Content-Type"] = headers["Content-Type"] ?? "application/json";
+  if (options.body !== undefined && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
   }
   const token = getToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
