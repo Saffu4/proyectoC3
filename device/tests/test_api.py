@@ -249,3 +249,23 @@ def test_panel_web_servido_desde_flask(device_env):
     # endpoints API inexistentes siguen dando JSON 404
     resp = client().get("/api/no-existe")
     assert resp.status_code == 404 and resp.is_json
+
+
+def test_capture_flujo_completo_con_detector_stub(device_env, monkeypatch):
+    """Con webcam sintetica + deteccion simulada: captura -> entrena -> label estable."""
+    from device.face_detector import FaceDetector
+
+    monkeypatch.setattr(FaceDetector, "detect", lambda self, frame: [(40, 40, 100, 100)])
+    helpers.set_camera_static([helpers.make_test_frame(8000)] * 5)
+    token = helpers.login_admin(client())
+    c = client()
+    pid = c.post("/api/people", headers=auth_header(token),
+                 json={"full_name": "Camelia C"}).get_json()["id"]
+    resp = c.post(f"/api/people/{pid}/capture", headers=auth_header(token), json={"count": 4})
+    assert resp.status_code == 201, resp.get_json()
+    data = resp.get_json()
+    assert data["saved"] == 4 and data["model_label"] >= 1
+    detail = c.get(f"/api/people/{pid}", headers=auth_header(token)).get_json()
+    assert detail["face_images_count"] == 4
+    resp = c.post(f"/api/people/{pid}/train", headers=auth_header(token))
+    assert resp.status_code == 201
