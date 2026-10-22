@@ -1,0 +1,9 @@
+# Servicio de dispositivo (Raspberry Pi 5, ARM64)
+# Instalar en venv: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# En Debian 13 de la Pi, si pip dice "externally-managed-environment", usar el venv.
+opencv-contrib-python==4.10.0.84
+numpy==1.26.4
+Flask==3.0.3
+pytest==8.3.3
+# Solo si prefieres python-dotenv en vez del cargador interno:
+# python-dotenv==1.0.1

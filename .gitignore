@@ -1,0 +1,41 @@
+# --- Datos privados (roetros, modelos, base de datos) ---
+data/
+data/*
+rostros/
+modelos/
+*.jpg
+*.png
+*.yml
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Secretos / entorno ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+supabase/service-role
+backups/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# --- Node / web ---
+node_modules/
+dist/
+.vite/
+*.local
+
+# --- IDE / sistema ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
