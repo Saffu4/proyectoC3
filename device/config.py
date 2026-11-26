@@ -83,6 +83,25 @@ POLICY_MAX_AGE_HOURS = float(os.environ.get("POLICY_MAX_AGE_HOURS", "72"))
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
+# --- Pantalla TFT 3.5" SPI (ILI9486 + táctil XPT2046), ver docs/pantalla-tft.md ---
+# Si es true, `device.cli serve` dibuja la vista de acceso en la pantalla.
+TFT_ENABLED = os.environ.get("TFT_ENABLED", "false").lower() == "true"
+# Vacío = autodetectar (/sys/class/graphics/fb*/name contiene "ili9486").
+TFT_FB_DEVICE = os.environ.get("TFT_FB_DEVICE", "")
+# Vacío = autodetectar ("ADS7846 Touchscreen" en /proc/bus/input/devices).
+TFT_TOUCH_DEVICE = os.environ.get("TFT_TOUCH_DEVICE", "")
+# Calibración táctil "xmin,xmax,ymin,ymax,swap" en valores crudos (0-4095).
+# Valores del fabricante (LCD-show) para rotate=90.
+TFT_TOUCH_CAL = os.environ.get("TFT_TOUCH_CAL", "3936,227,268,3880,1")
+# "toque": verificar al tocar la pantalla. "auto": verificar solo al ver un rostro.
+TFT_MODE = os.environ.get("TFT_MODE", "toque").lower()
+TFT_RESULT_SECONDS = float(os.environ.get("TFT_RESULT_SECONDS", "3"))
+TFT_FPS = float(os.environ.get("TFT_FPS", "8"))
+# Si el rojo y el azul salen cambiados (p. ej. con PERFIL=piscreen), poner true.
+TFT_SWAP_RB = os.environ.get("TFT_SWAP_RB", "false").lower() == "true"
+# Reconocimiento en vivo (caja verde/roja con nombre) sobre la vista de cámara.
+TFT_LIVE_RECOGNITION = os.environ.get("TFT_LIVE_RECOGNITION", "true").lower() == "true"
+
 # --- Seguridad ---
 SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", str(8 * 3600)))
 LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "5"))

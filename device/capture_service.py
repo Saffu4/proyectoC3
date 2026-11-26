@@ -13,7 +13,7 @@ import cv2
 
 from . import camera, db, config
 from .face_detector import FaceDetector
-from .face_recognizer import next_model_label, load_face_to_train
+from .face_recognizer import crop_face, next_model_label, load_face_to_train
 
 MIN_FACE_PX = 80  # ancho mínimo de la cara para considerarla utilizable
 
@@ -98,12 +98,7 @@ def capture_faces(person_id: str, count: int = 10, timeout_s: float = 30.0) -> d
             if w < MIN_FACE_PX:
                 continue
             # margen alrededor del rostro (igual que registrar_rostro.py base)
-            margen_x = int(w * config.FACE_MARGIN)
-            margen_y = int(h * config.FACE_MARGIN)
-            H, W = frame.shape[:2]
-            x1, y1 = max(0, x - margen_x), max(0, y - margen_y)
-            x2, y2 = min(W, x + w + margen_x), min(H, y + h + margen_y)
-            roi = frame[y1:y2, x1:x2]
+            roi = crop_face(frame, (x, y, w, h))
             gray = load_face_to_train(roi)  # gris + resize 200 + ecualización
             filename = folder / f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{int(time.monotonic()*1000)%10000}_{saved}.jpg"
             # volvemos a BGR para guardar consistente con el pipeline original (jpg)

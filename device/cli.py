@@ -6,6 +6,8 @@ Uso (desde la raíz del proyecto en la Pi):
   python -m device.cli access-check        # una comprobación de acceso en vivo
   python -m device.cli capture --person-id UUID --count 10
   python -m device.cli serve               # arranca Flask (no exponer a Internet)
+  python -m device.cli tft-test            # probar la pantalla TFT y el táctil
+  python -m device.cli tft                 # solo la vista de acceso en la TFT
 """
 from __future__ import annotations
 
@@ -39,7 +41,12 @@ def cmd_import_base(args):
     images = sorted(glob.glob(os.path.join(src, "*.jpg")))
     if not images:
         raise SystemExit(f"[error] No se encontraron *.jpg en {src}")
-    pid = capture_service.ensure_face_profile_person(
+    if not args.force and db.query("SELECT 1 FROM people WHERE full_name = ?", (args.name,)):
+        raise SystemExit(
+            f"[error] Ya existe una persona llamada '{args.name}' (¿import-base ya se ejecutó?). "
+            "Usa --name con otro nombre o --force para importarla de nuevo."
+        )
+    pid =capture_service.ensure_face_profile_person(
         full_name=args.name, document_id=None, roles=("user",),
         status="active", expires_at=None,
     )
@@ -73,6 +80,7 @@ def cmd_import_base(args):
 
 
 def cmd_init_admin(args):
+    db.init_db()  # permite ejecutar init-admin en una instalación nueva
     init_admin(args.username, args.password)
     print(f"[ok] Cuenta administrativa '{args.username}' creada/actualizada.")
 
@@ -95,10 +103,10 @@ def cmd_access_check(_args):
     if not faces:
         print("[denied] No se detectó ningún rostro")
         return
-    x, y, w, h = faces[0]
     from . import access_service
+    from .face_recognizer import crop_face
 
-    match = recognizer.predict(frame[y : y + h, x : x + w])
+    match = recognizer.predict(crop_face(frame, faces[0]))
     decision = access_service.decide_from_recognition(match)
     state = "GRANTED" if decision.granted else "DENIED"
     print(f"[{state}] category={decision.category} person={decision.person_id} "
@@ -115,12 +123,37 @@ def cmd_serve(args):
     db.init_db()
     from .app import app
 
+    if config.TFT_ENABLED:
+        from . import tft_display
+
+        tft_display.start_in_thread()  # misma cámara que la API (un solo proceso)
+
     app.run(
         host=config.FLASK_HOST,
         port=config.FLASK_PORT,
         debug=False,  # nunca debug expuesto
         threaded=True,
     )
+
+
+def cmd_tft(_args):
+    """Solo la vista de acceso en la pantalla TFT (sin API web)."""
+    db.init_db()
+    from . import tft_display
+
+    display = tft_display.build_display()
+    print(f"[tft] Vista de acceso en {display.fb.info.device}. Ctrl+C para salir.")
+    try:
+        display.run()
+    except KeyboardInterrupt:
+        display.stop()
+
+
+def cmd_tft_test(args):
+    """Barras de color + coordenadas del táctil, para comprobar la instalación."""
+    from . import tft_display
+
+    tft_display.patron_prueba(seconds=args.segundos)
 
 
 def main():
@@ -138,6 +171,8 @@ def main():
     p.add_argument("--name", default="Persona autorizada")
     p.add_argument("--model", default="~/Desktop/modelos/lbph.yml",
                    help="modelo lbph.yml del base (solo se respalda una copia)")
+    p.add_argument("--force", action="store_true",
+                   help="importar aunque ya exista una persona con ese nombre")
     p.set_defaults(func=cmd_import_base)
 
     p = sub.add_parser("train", help="entrenar el modelo LBPH")
@@ -151,6 +186,13 @@ def main():
     p.add_argument("--person-id", required=True)
     p.add_argument("--count", type=int, default=10)
     p.set_defaults(func=cmd_capture)
+
+    p = sub.add_parser("tft", help="vista de acceso en la pantalla TFT (sin API web)")
+    p.set_defaults(func=cmd_tft)
+
+    p = sub.add_parser("tft-test", help="probar pantalla TFT y táctil (barras de color)")
+    p.add_argument("--segundos", type=float, default=60.0)
+    p.set_defaults(func=cmd_tft_test)
 
     p = sub.add_parser("serve", help="arrancar la API/panel (localhost)")
     p.set_defaults(func=cmd_serve)

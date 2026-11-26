@@ -1,0 +1,99 @@
+// Overlay para la pantalla 3.5" "RPi Display" (ILI9486 + táctil XPT2046/ADS7846),
+// también vendida como LCDwiki MPI3501, "tft35a" o Waveshare 3.5" (A).
+//
+// Fuente equivalente al binario tft35a-overlay.dtb del driver oficial LCD-show
+// (github.com/goodtft/LCD-show), descompilado y documentado para poder
+// revisarlo y compilarlo en la propia Pi:
+//   dtc -@ -I dts -O dtb -o /boot/firmware/overlays/tft35a.dtbo tft35a-overlay.dts
+//
+// Pines (numeración BCM): DC=24, RESET=25, IRQ táctil=17, SPI0 CE0=pantalla,
+// SPI0 CE1=táctil. Parámetros: speed, rotate (0/90/180/270), fps, bgr, swapxy.
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835", "brcm,bcm2708", "brcm,bcm2709", "brcm,bcm2712";
+
+	fragment@0 {
+		target = <&spi0>;
+		__overlay__ {
+			status = "okay";
+			spidev@0 { status = "disabled"; };
+			spidev@1 { status = "disabled"; };
+		};
+	};
+
+	fragment@1 {
+		target = <&gpio>;
+		__overlay__ {
+			tft35a_pins: tft35a_pins {
+				brcm,pins = <17 25 24>;      /* IRQ táctil, RESET, DC */
+				brcm,function = <0 0 0>;    /* entradas; el driver las reconfigura */
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <&spi0>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			tft35a: tft35a@0 {
+				compatible = "ilitek,ili9486";
+				reg = <0>;
+				pinctrl-names = "default";
+				pinctrl-0 = <&tft35a_pins>;
+				spi-max-frequency = <16000000>;
+				txbuflen = <32768>;
+				rotate = <90>;
+				bgr = <0>;
+				fps = <30>;
+				buswidth = <8>;
+				regwidth = <16>;   /* la placa usa conversor SPI -> bus de 16 bits */
+				reset-gpios = <&gpio 25 1>;
+				dc-gpios = <&gpio 24 0>;
+				debug = <0>;
+				/* secuencia de inicialización del fabricante (LCD-show) */
+				init = <
+					0x10000f1 0x36 0x04 0x00 0x3c 0x0f 0x8f
+					0x10000f2 0x18 0xa3 0x12 0x02 0xb2 0x12 0xff 0x10 0x00
+					0x10000f8 0x21 0x04
+					0x10000f9 0x00 0x08
+					0x1000036 0x08
+					0x10000b4 0x00
+					0x10000c1 0x41
+					0x10000c5 0x00 0x91 0x80 0x00
+					0x10000e0 0x0f 0x1f 0x1c 0x0c 0x0f 0x08 0x48 0x98 0x37 0x0a 0x13 0x04 0x11 0x0d 0x00
+					0x10000e1 0x0f 0x32 0x2e 0x0b 0x0d 0x05 0x47 0x75 0x37 0x06 0x10 0x03 0x24 0x20 0x00
+					0x100003a 0x55
+					0x1000011
+					0x1000036 0x28
+					0x20000ff
+					0x1000029
+				>;
+			};
+
+			tft35a_ts: tft35a-ts@1 {
+				compatible = "ti,ads7846";
+				reg = <1>;
+				spi-max-frequency = <2000000>;
+				interrupts = <17 2>;          /* flanco de bajada */
+				interrupt-parent = <&gpio>;
+				pendown-gpio = <&gpio 17 1>;
+				ti,x-plate-ohms = /bits/ 16 <60>;
+				ti,pressure-max = /bits/ 16 <255>;
+			};
+		};
+	};
+
+	__overrides__ {
+		speed =    <&tft35a>, "spi-max-frequency:0";
+		txbuflen = <&tft35a>, "txbuflen:0";
+		rotate =   <&tft35a>, "rotate:0";
+		fps =      <&tft35a>, "fps:0";
+		bgr =      <&tft35a>, "bgr:0";
+		debug =    <&tft35a>, "debug:0";
+		swapxy =   <&tft35a_ts>, "ti,swap-xy?";
+	};
+};

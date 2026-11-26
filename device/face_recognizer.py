@@ -140,7 +140,47 @@ def invalidate_shared() -> None:
     _shared = None
 
 
+LABEL_COUNTER_KEY = "model_label_counter"
+
+
 def next_model_label() -> int:
-    """Asigna labels de forma estable: max(label)+1, empezando en 1."""
-    rows = db.query("SELECT COALESCE(MAX(model_label), 0) AS m FROM face_profiles")
-    return int(rows[0]["m"]) + 1
+    """Asigna labels de forma estable y SIN REUTILIZAR, empezando en 1.
+
+    Antes se usaba max(model_label)+1 de face_profiles: al borrar a la persona
+    con la etiqueta más alta, la siguiente persona heredaba su número y, hasta
+    reentrenar, el rostro de la persona borrada se reconocía como la nueva.
+    Ahora un contador persistente en `settings` solo crece (se toma el mayor
+    entre el contador y el máximo de la tabla, por compatibilidad con bases
+    existentes). La lectura y escritura van en la misma conexión/bloqueo."""
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (LABEL_COUNTER_KEY,)
+        ).fetchone()
+        try:
+            counter = int(row["value"]) if row else 0
+        except (TypeError, ValueError):
+            counter = 0
+        max_db = conn.execute(
+            "SELECT COALESCE(MAX(model_label), 0) AS m FROM face_profiles"
+        ).fetchone()["m"]
+        label = max(counter, int(max_db)) + 1
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (LABEL_COUNTER_KEY, str(label)),
+        )
+    return label
+
+
+def crop_face(frame: np.ndarray, rect) -> np.ndarray:
+    """Recorte del rostro con el margen de captura (FACE_MARGIN, 15 % por defecto).
+
+    Se usa IGUAL al capturar (entrenamiento) y al reconocer, para que el modelo
+    compare imágenes encuadradas de la misma forma."""
+    (x, y, w, h) = rect
+    margen_x = int(w * config.FACE_MARGIN)
+    margen_y = int(h * config.FACE_MARGIN)
+    H, W = frame.shape[:2]
+    x1, y1 = max(0, x - margen_x), max(0, y - margen_y)
+    x2, y2 = min(W, x + w + margen_x), min(H, y + h + margen_y)
+    return frame[y1:y2, x1:x2]
