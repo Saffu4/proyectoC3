@@ -97,6 +97,8 @@ TFT_TOUCH_CAL = os.environ.get("TFT_TOUCH_CAL", "3936,227,268,3880,1")
 TFT_MODE = os.environ.get("TFT_MODE", "toque").lower()
 TFT_RESULT_SECONDS = float(os.environ.get("TFT_RESULT_SECONDS", "3"))
 TFT_FPS = float(os.environ.get("TFT_FPS", "8"))
+# Si el rojo y el azul salen cambiados (p. ej. con PERFIL=piscreen), poner true.
+TFT_SWAP_RB = os.environ.get("TFT_SWAP_RB", "false").lower() == "true"
 # Reconocimiento en vivo (caja verde/roja con nombre) sobre la vista de cámara.
 TFT_LIVE_RECOGNITION = os.environ.get("TFT_LIVE_RECOGNITION", "true").lower() == "true"
 

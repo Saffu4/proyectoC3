@@ -128,6 +128,8 @@ class Framebuffer:
         w, h = self.size
         if img_bgr.shape[1] != w or img_bgr.shape[0] != h:
             img_bgr = cv2.resize(img_bgr, (w, h))
+        if config.TFT_SWAP_RB:
+            img_bgr = img_bgr[:, :, ::-1]
         if self.info.bpp == 16:
             pixels = bgr_to_rgb565(img_bgr).astype("<u2")
         elif self.info.bpp == 32:

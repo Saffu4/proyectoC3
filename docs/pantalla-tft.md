@@ -70,6 +70,31 @@ Opciones: `sudo ROTACION=270 bash scripts/instalar_pantalla_tft.sh` (horizontal
 invertida; también 0 y 180 en vertical). Para deshacer todo:
 `sudo bash scripts/instalar_pantalla_tft.sh --desinstalar` y reinicia.
 
+## Si la pantalla queda en blanco
+
+Blanco = la luz de fondo está encendida pero el driver no inicializó la
+pantalla. Ejecuta el diagnóstico; al final dice qué falló y qué probar:
+
+```bash
+sudo bash scripts/diagnostico_pantalla_tft.sh
+```
+
+Hay tres perfiles de driver para esta misma pantalla. Si uno deja la pantalla
+en blanco, instala el siguiente y reinicia:
+
+```bash
+sudo PERFIL=piscreen bash scripts/instalar_pantalla_tft.sh && sudo reboot
+sudo PERFIL=piscreen-drm bash scripts/instalar_pantalla_tft.sh && sudo reboot
+```
+
+| Perfil | Qué usa |
+|---|---|
+| `tft35a` (por defecto) | overlay del fabricante (LCD-show), compilado en la Pi |
+| `piscreen` | overlay **oficial** de Raspberry Pi que ya trae el sistema (mismos pines y chip) |
+| `piscreen-drm` | el mismo overlay oficial con el driver moderno DRM/KMS |
+
+Con `piscreen`, si el rojo y el azul salen cambiados pon `TFT_SWAP_RB=true` en `.env`.
+
 ## Comprobar
 
 Después de reiniciar:
@@ -146,3 +171,33 @@ Con rotate 0/180 usa `swap=0` y el orden normal (`crudo1` = X, `crudo2` = Y).
 | El táctil no responde | `sudo apt install evtest && sudo evtest` → elige "ADS7846" y toca: si no hay eventos, revisa que la pantalla esté bien encajada |
 | Cursor de consola parpadeando encima | El servicio lo desactiva si tiene permiso; si no: `echo 0 \| sudo tee /sys/class/graphics/fbcon/cursor_blink` |
 | Imagen lenta | Normal en SPI (~8 fps). Puedes probar `VELOCIDAD=24000000` al instalar; si aparece ruido, vuelve a 16000000 |
+
+## Poner a funcionar el programa completo
+
+Desde `~/Desktop/proyectoC3` en la Pi (solo la primera vez los pasos 1-3):
+
+```bash
+# 1. Entorno de Python y configuración
+python3 -m venv device/.venv && device/.venv/bin/pip install -r device/requirements.txt
+cp -n .env.example .env        # edita FLASK_SECRET; TFT_ENABLED=true lo pone el instalador
+
+# 2. Administrador del panel web
+device/.venv/bin/python -m device.cli init-admin --password 'UNA_CONTRASEÑA_LARGA'
+
+# 3. Personas: importar la del proyecto base (o registrarlas desde el panel web)
+device/.venv/bin/python -m device.cli import-base
+
+# 4. Arrancar (API + panel web + pantalla TFT)
+device/.venv/bin/python -m device.cli serve
+```
+
+- En la consola debe aparecer `[tft] Vista de acceso en /dev/fb1 (480x320)…`.
+  Si dice `Pantalla TFT no disponible`, la pantalla aún no está instalada bien
+  (ver la sección de pantalla en blanco).
+- El panel web queda en `http://127.0.0.1:5000` en la Pi. Desde él se
+  registran personas, se capturan rostros y se **entrena** el modelo. Mientras
+  no haya modelo entrenado, la pantalla muestra "Modelo sin entrenar".
+- Para que arranque solo al encender la Pi, usa el servicio systemd de
+  [deployment-local.md](deployment-local.md) (ya incluye los grupos `video` e `input`).
+- No ejecutes a la vez `serve` y `tft` ni el `detector.py` del proyecto base:
+  la cámara solo admite un programa.

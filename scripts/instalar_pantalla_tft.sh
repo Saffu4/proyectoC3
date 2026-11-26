@@ -5,6 +5,13 @@
 #   sudo ROTACION=270 bash scripts/instalar_pantalla_tft.sh # horizontal invertida
 #   sudo bash scripts/instalar_pantalla_tft.sh --desinstalar
 #
+# Perfiles de driver (PERFIL=...), todos para la misma pantalla y pines:
+#   tft35a        (por defecto) overlay del fabricante (LCD-show), compilado aquí
+#   piscreen      overlay OFICIAL de Raspberry Pi (ya viene en el sistema), fbtft
+#   piscreen-drm  overlay oficial con el driver moderno DRM/KMS
+# Si la pantalla queda en blanco con uno, prueba el siguiente:
+#   sudo PERFIL=piscreen bash scripts/instalar_pantalla_tft.sh && sudo reboot
+#
 # Qué hace (todo reversible):
 #   1. Instala device-tree-compiler y compila hardware/tft35a/tft35a-overlay.dts
 #      en /boot/firmware/overlays/tft35a.dtbo
@@ -16,6 +23,7 @@
 set -euo pipefail
 
 ROTACION="${ROTACION:-90}"
+PERFIL="${PERFIL:-tft35a}"
 VELOCIDAD="${VELOCIDAD:-16000000}"
 BOOT_DIR="${BOOT_DIR:-/boot/firmware}"   # sobrescribible solo para pruebas
 CONFIG="$BOOT_DIR/config.txt"
@@ -35,6 +43,7 @@ error() { echo -e "\033[1;31m[error]\033[0m $*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || error "Ejecuta con sudo: sudo bash $0"
 [[ -f "$CONFIG" ]] || error "No existe $CONFIG (¿es Raspberry Pi OS Bookworm/Trixie?)"
 case "$ROTACION" in 0|90|180|270) ;; *) error "ROTACION debe ser 0, 90, 180 o 270";; esac
+case "$PERFIL" in tft35a|piscreen|piscreen-drm) ;; *) error "PERFIL debe ser tft35a, piscreen o piscreen-drm";; esac
 
 quitar_bloque() {
   # borra el bloque marcado (si existe) sin tocar nada más
@@ -54,14 +63,24 @@ MODELO="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || echo desconocido)"
 info "Placa: $MODELO"
 [[ "$MODELO" == *"Raspberry Pi"* ]] || aviso "No parece una Raspberry Pi; continúo de todos modos"
 
-# 1. Compilar el overlay -------------------------------------------------------
-[[ -f "$DTS" ]] || error "No encuentro $DTS"
-if ! command -v dtc >/dev/null; then
-  info "Instalando device-tree-compiler…"
-  apt-get update -qq && apt-get install -y -qq device-tree-compiler
+# 1. Overlay ---------------------------------------------------------------------
+info "Perfil de driver: $PERFIL"
+if [[ "$PERFIL" == "tft35a" ]]; then
+  [[ -f "$DTS" ]] || error "No encuentro $DTS"
+  if ! command -v dtc >/dev/null; then
+    info "Instalando device-tree-compiler…"
+    apt-get update -qq && apt-get install -y -qq device-tree-compiler
+  fi
+  dtc -@ -q -I dts -O dtb -o "$OVERLAY_DST" "$DTS"
+  info "Overlay compilado en $OVERLAY_DST"
+  LINEA="dtoverlay=tft35a,rotate=${ROTACION},speed=${VELOCIDAD}"
+  CAL="3936,227,268,3880,1"
+else
+  [[ -f "$BOOT_DIR/overlays/piscreen.dtbo" ]] || error "Este sistema no trae piscreen.dtbo; actualiza: sudo apt update && sudo apt full-upgrade"
+  LINEA="dtoverlay=piscreen,rotate=${ROTACION},speed=${VELOCIDAD}"
+  [[ "$PERFIL" == "piscreen-drm" ]] && LINEA="${LINEA},drm"
+  CAL="3936,227,268,3880,0"   # piscreen ya intercambia los ejes del táctil en el driver
 fi
-dtc -@ -q -I dts -O dtb -o "$OVERLAY_DST" "$DTS"
-info "Overlay compilado en $OVERLAY_DST"
 
 # 2. config.txt -----------------------------------------------------------------
 RESPALDO="$CONFIG.bak-proyectoc3-$(date +%Y%m%d-%H%M%S)"
@@ -70,7 +89,7 @@ info "Respaldo de config.txt: $RESPALDO"
 
 # Desactivar overlays de pantallas SPI anteriores (LCD-show, fbtft genérico…)
 # que chocarían con este en el mismo bus SPI.
-for viejo in tft35a waveshare35a mhs35 fbtft ads7846; do
+for viejo in tft35a waveshare35a mhs35 fbtft ads7846 piscreen; do
   if grep -Eq "^[[:space:]]*dtoverlay=${viejo}([,:]|$)" "$CONFIG"; then
     sed -i -E "s/^([[:space:]]*dtoverlay=${viejo}([,:].*)?)$/#\1  # desactivado por proyectoC3/" "$CONFIG"
     aviso "Comentada una línea dtoverlay=${viejo} previa"
@@ -82,10 +101,10 @@ quitar_bloque
   echo "$MARCA_INI"
   echo "[all]"
   echo "dtparam=spi=on"
-  echo "dtoverlay=tft35a,rotate=${ROTACION},speed=${VELOCIDAD}"
+  echo "$LINEA"
   echo "$MARCA_FIN"
 } >>"$CONFIG"
-info "config.txt: dtparam=spi=on + dtoverlay=tft35a,rotate=${ROTACION}"
+info "config.txt: dtparam=spi=on + $LINEA"
 
 # 3. Permisos -------------------------------------------------------------------
 if [[ -n "$USUARIO" && "$USUARIO" != "root" ]]; then
@@ -102,6 +121,11 @@ if [[ -f "$ENV_FILE" ]]; then
   else
     printf '\n# Pantalla TFT 3.5 (docs/pantalla-tft.md)\nTFT_ENABLED=true\n' >>"$ENV_FILE"
   fi
+  if grep -q '^TFT_TOUCH_CAL=' "$ENV_FILE"; then
+    sed -i "s/^TFT_TOUCH_CAL=.*/TFT_TOUCH_CAL=${CAL}/" "$ENV_FILE"
+  else
+    echo "TFT_TOUCH_CAL=${CAL}" >>"$ENV_FILE"
+  fi
   info "TFT_ENABLED=true en $ENV_FILE"
 else
   aviso "No hay $ENV_FILE: copia .env.example a .env y pon TFT_ENABLED=true"
@@ -111,7 +135,8 @@ cat <<EOF
 
 Listo. Ahora:
   1) sudo reboot
-  2) Comprueba la pantalla y el táctil (sale con barras de color):
+  2) Comprueba la pantalla y el táctil (barras de color; si queda blanca, ejecuta
+     sudo bash scripts/diagnostico_pantalla_tft.sh):
        cd $RAIZ && device/.venv/bin/python -m device.cli tft-test
   3) Si el servicio corre con systemd, añade en [Service]:
        SupplementaryGroups=video input

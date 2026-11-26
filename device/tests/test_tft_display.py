@@ -190,3 +190,12 @@ def test_modo_auto_verifica_con_rostro_estable(device_env, tmp_path, monkeypatch
     assert db.query("SELECT COUNT(*) AS c FROM access_events WHERE result='granted'")[0]["c"] == 1
     disp.step()  # durante el resultado/cooldown no se repite
     assert db.query("SELECT COUNT(*) AS c FROM access_events")[0]["c"] == 1
+
+
+def test_swap_rb_corrige_colores(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "TFT_SWAP_RB", True)
+    fb = _fake_fb(tmp_path)
+    img = np.zeros((H, W, 3), dtype=np.uint8)
+    img[:, :] = (0, 0, 255)  # rojo en BGR -> se envía como azul
+    fb.show(img)
+    assert struct.unpack_from("<H", Path(fb.info.device).read_bytes(), 0)[0] == 0x001F
