@@ -13,7 +13,9 @@ Qué muestra:
   que registra el evento, y se muestra una pantalla verde "Bienvenido/a" o roja
   "Acceso denegado" con el motivo durante TFT_RESULT_SECONDS.
 
-Nunca concede rol administrativo: solo bienvenida o denegación.
+Nunca concede rol administrativo: solo bienvenida o denegación. El botón
+"Admin" (esquina superior derecha) abre el menú táctil de tft_admin, protegido
+por PIN, para registrar personas, tomar fotos y entrenar el modelo.
 
 Uso:
   TFT_ENABLED=true en .env  -> `python -m device.cli serve` la arranca en un hilo
@@ -291,8 +293,24 @@ def _text_center(img: np.ndarray, text: str, cy: int, scale: float, color, thick
     cv2.putText(img, text, (x, cy + th // 2), font, scale, color, thickness, cv2.LINE_AA)
 
 
-def render_live(frame: np.ndarray, width: int, height: int, hint: str) -> np.ndarray:
+ADMIN_BUTTON = (96, 44)  # ancho, alto del botón "Admin" (esquina superior derecha)
+
+
+def in_admin_button(x: int, y: int, width: int) -> bool:
+    bw, bh = ADMIN_BUTTON
+    return x >= width - bw and y < bh
+
+
+def render_live(frame: np.ndarray, width: int, height: int, hint: str,
+                admin_button: bool = True) -> np.ndarray:
     out = _fit_cover(frame, width, height)
+    if admin_button:
+        bw, bh = ADMIN_BUTTON
+        cv2.rectangle(out, (width - bw + 4, 4), (width - 4, bh - 4), (70, 55, 45), -1)
+        cv2.rectangle(out, (width - bw + 4, 4), (width - 4, bh - 4), BLANCO, 1)
+        (tw, th), _ = cv2.getTextSize("Admin", cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        cv2.putText(out, "Admin", (width - bw // 2 - tw // 2, bh // 2 + th // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, BLANCO, 1, cv2.LINE_AA)
     bar_h = max(30, height // 9)
     overlay = out.copy()
     cv2.rectangle(overlay, (0, height - bar_h), (width, height), NEGRO, -1)
@@ -355,6 +373,13 @@ class TFTDisplay:
         self.fb = fb
         self.touch = touch
         self.detector = detector or FaceDetector()
+        from .tft_admin import AdminUI
+
+        self.admin = AdminUI(fb)
+        try:
+            self.cal = TouchCalibration.parse(config.TFT_TOUCH_CAL)
+        except ValueError:
+            self.cal = TouchCalibration.parse("3936,227,268,3880,1")
         self.mode = config.TFT_MODE if config.TFT_MODE in ("toque", "auto") else "toque"
         self._stop = threading.Event()
         self._result_until = 0.0
@@ -382,9 +407,20 @@ class TFTDisplay:
         """Un ciclo: lee toque, decide qué dibujar y lo dibuja."""
         w, h = self.fb.size
         now = time.time()
-        tap = self.touch.pop_tap() if self.touch else None
+        raw = self.touch.pop_tap() if self.touch else None
+        tap = self.cal.to_screen(raw[0], raw[1], w, h) if raw is not None else None
+        if self.admin.active:
+            self.admin.step(tap)
+            if self.admin.active:
+                return
+            self._result_until = 0.0  # al salir del menú se vuelve a la vista
+            tap = None
         if now < self._result_until:
             return  # se mantiene la pantalla de resultado
+        if tap is not None and in_admin_button(tap[0], tap[1], w):
+            self.admin.open()
+            self.admin.step(None)
+            return
         if tap is not None and self.mode == "toque":
             self.fb.show(render_message(w, h, GRIS, "Verificando..."))
             self._show_result(run_access_check(self.detector))
@@ -491,5 +527,84 @@ def patron_prueba(seconds: float = 60.0) -> None:
     finally:
         if touch:
             touch.stop()
+        fb.clear()
+        fb.close()
+
+
+# ----------------------------------------------------------- calibración táctil
+
+def compute_calibration(points: list[tuple[tuple[int, int], tuple[int, int]]],
+                        width: int, height: int) -> TouchCalibration:
+    """points = [(pantalla, crudo)] para arriba-izquierda, arriba-derecha y
+    abajo-izquierda. Detecta si los ejes vienen intercambiados."""
+    (s1, r1), (s2, r2), (s3, r3) = points
+    # al moverse en horizontal (1 -> 2), ¿qué eje crudo cambió más?
+    swap = abs(r2[1] - r1[1]) > abs(r2[0] - r1[0])
+    ix, iy = (1, 0) if swap else (0, 1)
+    dx = s2[0] - s1[0]
+    dy = s3[1] - s1[1]
+    kx = (r2[ix] - r1[ix]) / dx
+    ky = (r3[iy] - r1[iy]) / dy
+    if abs(kx) < 1 or abs(ky) < 1:
+        raise ValueError("Los toques fueron muy parecidos: toca justo en el centro de cada cruz")
+    xmin = r1[ix] - s1[0] * kx
+    ymin = r1[iy] - s1[1] * ky
+    return TouchCalibration(round(xmin), round(xmin + width * kx),
+                            round(ymin), round(ymin + height * ky), swap)
+
+
+def save_env_value(key: str, value: str, env_path: Path | None = None) -> Path:
+    env_path = env_path or Path.cwd() / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            break
+    else:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return env_path
+
+
+def calibrar(timeout_s: float = 30.0) -> TouchCalibration:
+    """Muestra 3 cruces, registra cada toque y guarda TFT_TOUCH_CAL en .env."""
+    fb = Framebuffer(find_framebuffer())
+    w, h = fb.size
+    dev = find_touch_device()
+    if not dev:
+        raise TFTNotFoundError("No se detectó el táctil (ADS7846)")
+    touch = TouchReader(dev).start()
+    m = 30
+    targets = [(m, m), (w - m, m), (m, h - m)]
+    points = []
+    try:
+        for i, (tx, ty) in enumerate(targets, 1):
+            img = np.full((h, w, 3), (40, 32, 28), dtype=np.uint8)
+            cv2.line(img, (tx - 20, ty), (tx + 20, ty), BLANCO, 2)
+            cv2.line(img, (tx, ty - 20), (tx, ty + 20), BLANCO, 2)
+            cv2.circle(img, (tx, ty), 6, (0, 0, 255), -1)
+            _text_center(img, f"Toca el centro de la cruz ({i}/3)", h // 2, 0.6, BLANCO, 1)
+            fb.show(img)
+            touch.pop_tap()
+            end = time.time() + timeout_s
+            raw = None
+            while raw is None and time.time() < end:
+                raw = touch.pop_tap()
+                time.sleep(0.05)
+            if raw is None:
+                raise TFTNotFoundError("No se registró ningún toque a tiempo")
+            print(f"[tft] punto {i}: pantalla=({tx},{ty}) crudo={raw}")
+            points.append(((tx, ty), raw))
+            time.sleep(0.4)
+        cal = compute_calibration(points, w, h)
+        value = f"{cal.xmin:.0f},{cal.xmax:.0f},{cal.ymin:.0f},{cal.ymax:.0f},{int(cal.swap)}"
+        path = save_env_value("TFT_TOUCH_CAL", value)
+        config.TFT_TOUCH_CAL = value
+        print(f"[tft] Calibración guardada en {path}: TFT_TOUCH_CAL={value}")
+        fb.show(render_message(w, h, VERDE, "Calibrado", "Reinicia el programa"))
+        time.sleep(2)
+        return cal
+    finally:
+        touch.stop()
         fb.clear()
         fb.close()

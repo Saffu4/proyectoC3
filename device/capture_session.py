@@ -215,6 +215,11 @@ def start_session(person_id: str, target: int) -> CaptureSession:
         for ses in _registry.values():
             if ses.status == "running":
                 raise CaptureBusyError("Ya hay una sesión de captura en curso: deténgela primero")
+        # Sin perfil facial (model_label) el entrenamiento ignora las fotos y la
+        # persona nunca sería reconocida: se garantiza ANTES de capturar.
+        from .capture_service import ensure_face_profile
+
+        ensure_face_profile(person_id)
         ses = CaptureSession(person_id, target)
         _registry[ses.id] = ses
     ses._thread.start()

@@ -54,7 +54,7 @@ Documentación completa:
 | [docs/pantalla-tft.md](docs/pantalla-tft.md) | Pantalla táctil TFT 3.5" (ILI9486/XPT2046) en la Pi 5 |
 | [docs/security.md](docs/security.md) | Seguridad, retención y riesgos |
 | [docs/authorization-guide.md](docs/authorization-guide.md) | Calibración del umbral LBPH |
-| [device/tests/](device/tests/) | 77 pruebas automatizadas (`pytest device/tests`) |
+| [device/tests/](device/tests/) | 94 pruebas automatizadas (`pytest device/tests`) |
 
 ## Compatibilidad con el proyecto base
 

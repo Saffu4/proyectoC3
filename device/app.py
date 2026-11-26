@@ -13,7 +13,7 @@ import cv2
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from . import access_service, auth, camera, capture_service, config, db, event_service, sync_service
-from . import capture_session
+from . import capture_session, people_service
 from . import preview_overlay
 from .access_service import AccessDecision
 from .camera import CameraDisconnectedError
@@ -336,22 +336,12 @@ def person_activate(person_id: str):
 def person_delete(person_id: str):
     """Eliminación con política de retención: borra imágenes biométricas y
     eventos quedan con person_id NULL (retención auditiva); modelo hay que reentrenar."""
-    rows = db.query("SELECT id FROM people WHERE id=?", (person_id,))
-    if not rows:
+    # Borra fotos/perfil/persona y reentrena YA: el modelo no debe seguir
+    # conteniendo el rostro borrado (misma lógica que la pantalla TFT).
+    result = people_service.delete_person(person_id, actor=request.admin["username"])  # type: ignore[attr-defined]
+    if result is None:
         return _error("Persona no encontrada", 404, "not_found")
-    saved = capture_service.delete_face_images(person_id)
-    db.execute("DELETE FROM face_profiles WHERE person_id=?", (person_id,))
-    db.execute("DELETE FROM people WHERE id=?", (person_id,))
-    # Reentrenar YA: el modelo no debe seguir conteniendo el rostro borrado.
-    invalidate_shared()
-    retrained = True
-    try:
-        get_recognizer().train()
-    except ModelUnavailableError:
-        retrained = False  # nadie más tiene imágenes: el modelo queda vacío/borrado
-    invalidate_shared()
-    log_audit("person_delete", f"id={person_id} images={saved} retrained={retrained}")
-    return jsonify({"ok": True, "face_images_deleted": saved, "model_retrained": retrained})
+    return jsonify({"ok": True, **result})
 
 
 @app.post("/api/people/<person_id>/capture")
@@ -605,14 +595,17 @@ def roles_patch(role_id: int):
 
 # Claves que gestiona el propio sistema: editarlas a mano rompería garantías
 # (p. ej. last_policy_sync "refrescaría" una política vencida).
-PROTECTED_SETTINGS = {"device_id", "last_policy_sync", "model_label_counter"}
+PROTECTED_SETTINGS = {"device_id", "last_policy_sync", "model_label_counter",
+                      people_service.PIN_SETTING}
+# Nunca se devuelven por la API (el PIN de la pantalla se cambia con el CLI).
+HIDDEN_SETTINGS = {people_service.PIN_SETTING}
 
 
 @app.get("/api/settings")
 @require_admin
 def settings_get():
     rows = db.query("SELECT key, value FROM settings")
-    return jsonify({r["key"]: r["value"] for r in rows})
+    return jsonify({r["key"]: r["value"] for r in rows if r["key"] not in HIDDEN_SETTINGS})
 
 
 @app.patch("/api/settings")

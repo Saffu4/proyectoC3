@@ -130,6 +130,36 @@ sudo systemctl daemon-reload && sudo systemctl restart proyectoc3
 journalctl -u proyectoc3 | grep tft      # "[tft] Vista de acceso en /dev/fb1 (480x320)…"
 ```
 
+## Administrar desde la pantalla (registrar personas, fotos, entrenar)
+
+Sin teclado ni panel web, desde la misma pantalla táctil:
+
+1. Configura una sola vez el PIN de administrador (no se ve al escribirlo):
+   ```bash
+   device/.venv/bin/python -m device.cli tft-pin
+   ```
+2. Si los toques no caen donde tocas, calibra (tocas 3 cruces y se guarda en `.env`;
+   detén antes `serve`):
+   ```bash
+   device/.venv/bin/python -m device.cli tft-calibrar
+   ```
+3. En la vista de acceso toca **Admin** (esquina superior derecha) y escribe el PIN.
+
+| Botón | Qué hace |
+|---|---|
+| **Nueva persona** | teclado en pantalla para el nombre → toma 20 fotos con guía (luz, distancia, nitidez) → entrena el modelo solo |
+| **Personas** | lista; en cada persona: **Tomar fotos** (más fotos + reentrenar), **Suspender/Activar**, **Eliminar** (pide confirmación, borra sus fotos y reentrena) |
+| **Entrenar modelo** | reentrena con todas las fotos |
+| **Salir** | vuelve a la vista de acceso (también sale solo tras 90 s sin tocar) |
+
+Seguridad: el menú se abre **solo con el PIN**, nunca por reconocer un rostro.
+Tras 5 PIN incorrectos se bloquea 60 s. Todo queda en el registro de auditoría
+(`/api/audit-log`) con actor `pantalla`. El PIN se guarda cifrado y la API web
+no lo muestra ni deja cambiarlo.
+
+Las personas creadas en la pantalla tienen el rol `user` (pueden pasar). Para
+documento, vencimiento o roles usa el panel web.
+
 ## Configuración (`.env`)
 
 | Variable | Por defecto | Qué hace |

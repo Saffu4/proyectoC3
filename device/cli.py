@@ -8,6 +8,8 @@ Uso (desde la raíz del proyecto en la Pi):
   python -m device.cli serve               # arranca Flask (no exponer a Internet)
   python -m device.cli tft-test            # probar la pantalla TFT y el táctil
   python -m device.cli tft                 # solo la vista de acceso en la TFT
+  python -m device.cli tft-pin             # PIN del menú Admin de la pantalla
+  python -m device.cli tft-calibrar        # calibrar el táctil (3 toques)
 """
 from __future__ import annotations
 
@@ -156,6 +158,32 @@ def cmd_tft_test(args):
     tft_display.patron_prueba(seconds=args.segundos)
 
 
+def cmd_tft_pin(args):
+    """Configura el PIN numérico del menú de administración de la pantalla."""
+    import getpass
+
+    from . import people_service
+
+    db.init_db()
+    pin = args.pin
+    if not pin:
+        pin = getpass.getpass("Nuevo PIN (4 a 8 dígitos): ")
+        if getpass.getpass("Repite el PIN: ") != pin:
+            raise SystemExit("[error] Los PIN no coinciden")
+    try:
+        people_service.set_admin_pin(pin)
+    except ValueError as exc:
+        raise SystemExit(f"[error] {exc}")
+    print("[ok] PIN de la pantalla guardado. Úsalo en el botón 'Admin' de la pantalla.")
+
+
+def cmd_tft_calibrar(_args):
+    """Calibra el táctil tocando 3 cruces; guarda TFT_TOUCH_CAL en .env."""
+    from . import tft_display
+
+    tft_display.calibrar()
+
+
 def main():
     parser = argparse.ArgumentParser(description="CLI del dispositivo proyectoC3")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -193,6 +221,13 @@ def main():
     p = sub.add_parser("tft-test", help="probar pantalla TFT y táctil (barras de color)")
     p.add_argument("--segundos", type=float, default=60.0)
     p.set_defaults(func=cmd_tft_test)
+
+    p = sub.add_parser("tft-pin", help="configurar el PIN del menú Admin de la pantalla")
+    p.add_argument("--pin", default=None, help="si se omite, se pide sin mostrarlo")
+    p.set_defaults(func=cmd_tft_pin)
+
+    p = sub.add_parser("tft-calibrar", help="calibrar el táctil de la pantalla (3 toques)")
+    p.set_defaults(func=cmd_tft_calibrar)
 
     p = sub.add_parser("serve", help="arrancar la API/panel (localhost)")
     p.set_defaults(func=cmd_serve)
