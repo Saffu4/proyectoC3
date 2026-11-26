@@ -17,6 +17,8 @@ EnvironmentFile=/home/saffu1/Desktop/proyectoC3/.env
 ExecStart=/home/saffu1/Desktop/proyectoC3/device/.venv/bin/python -m device.cli serve
 Restart=on-failure
 RestartSec=5
+# Pantalla TFT (docs/pantalla-tft.md): acceso a /dev/fb* y /dev/input/event*
+SupplementaryGroups=video input
 # endurecimiento
 PrivateTmp=true
 ProtectHome=read-only
