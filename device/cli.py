@@ -39,7 +39,12 @@ def cmd_import_base(args):
     images = sorted(glob.glob(os.path.join(src, "*.jpg")))
     if not images:
         raise SystemExit(f"[error] No se encontraron *.jpg en {src}")
-    pid = capture_service.ensure_face_profile_person(
+    if not args.force and db.query("SELECT 1 FROM people WHERE full_name = ?", (args.name,)):
+        raise SystemExit(
+            f"[error] Ya existe una persona llamada '{args.name}' (¿import-base ya se ejecutó?). "
+            "Usa --name con otro nombre o --force para importarla de nuevo."
+        )
+    pid =capture_service.ensure_face_profile_person(
         full_name=args.name, document_id=None, roles=("user",),
         status="active", expires_at=None,
     )
@@ -73,6 +78,7 @@ def cmd_import_base(args):
 
 
 def cmd_init_admin(args):
+    db.init_db()  # permite ejecutar init-admin en una instalación nueva
     init_admin(args.username, args.password)
     print(f"[ok] Cuenta administrativa '{args.username}' creada/actualizada.")
 
@@ -95,10 +101,10 @@ def cmd_access_check(_args):
     if not faces:
         print("[denied] No se detectó ningún rostro")
         return
-    x, y, w, h = faces[0]
     from . import access_service
+    from .face_recognizer import crop_face
 
-    match = recognizer.predict(frame[y : y + h, x : x + w])
+    match = recognizer.predict(crop_face(frame, faces[0]))
     decision = access_service.decide_from_recognition(match)
     state = "GRANTED" if decision.granted else "DENIED"
     print(f"[{state}] category={decision.category} person={decision.person_id} "
@@ -138,6 +144,8 @@ def main():
     p.add_argument("--name", default="Persona autorizada")
     p.add_argument("--model", default="~/Desktop/modelos/lbph.yml",
                    help="modelo lbph.yml del base (solo se respalda una copia)")
+    p.add_argument("--force", action="store_true",
+                   help="importar aunque ya exista una persona con ese nombre")
     p.set_defaults(func=cmd_import_base)
 
     p = sub.add_parser("train", help="entrenar el modelo LBPH")
