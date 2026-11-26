@@ -425,6 +425,7 @@ class AdminUI:
     last_activity: float = 0.0
     _fails: list = field(default_factory=list)
     _dirty: bool = True
+    _last_draw: float = 0.0
 
     @property
     def width(self) -> int:
@@ -479,9 +480,13 @@ class AdminUI:
         if (self.screen is not None and not self.screen.busy()
                 and now - self.last_activity > INACTIVITY_SECONDS):
             self.close()
-        if self.screen is not None and (self._dirty or self.screen.dynamic):
+        # redibujo periódico: recupera la imagen si la consola de texto del
+        # sistema llegó a escribir encima del framebuffer
+        if self.screen is not None and (self._dirty or self.screen.dynamic
+                                        or now - self._last_draw > 2.0):
             self.fb.show(self.screen.render())
             self._dirty = False
+            self._last_draw = now
 
     # --- acciones compartidas por varias pantallas ---
 

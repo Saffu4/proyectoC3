@@ -1,6 +1,46 @@
 # Despliegue local (la Pi funciona 24/7)
 
-## systemd (recomendado)
+## Arranque automático al encender (recomendado)
+
+Desde la carpeta del proyecto en la Pi:
+
+```bash
+sudo bash scripts/instalar_servicio.sh
+```
+
+Crea y habilita `proyectoc3.service` con las rutas de esa carpeta y tu usuario.
+Desde ese momento, al conectar la corriente la Pi arranca el programa sola
+(API, panel web y pantalla TFT), **sin internet**: el servicio no espera a la
+red y, con `SYNC_ENABLED=false`, nada usa internet. Si se cae, se reinicia en 5 s.
+Si la cámara o la pantalla tardan en aparecer al encender, el programa las
+espera.
+
+| Acción | Comando |
+|---|---|
+| Ver estado | `systemctl status proyectoc3` |
+| Ver mensajes en vivo | `journalctl -u proyectoc3 -f` |
+| Reiniciar (tras cambiar `.env` o `git pull`) | `sudo systemctl restart proyectoc3` |
+| Detener (antes de `tft-test`, `tft-calibrar`, `capture`…) | `sudo systemctl stop proyectoc3` |
+| Quitar el arranque automático | `sudo bash scripts/instalar_servicio.sh --desinstalar` |
+
+No ejecutes `device.cli serve` a mano mientras el servicio está activo: los dos
+pelearían por la cámara y el puerto 5000.
+
+### Hora sin internet
+
+Sin internet la Pi no puede poner la hora en línea. La Raspberry Pi 5 tiene
+reloj (RTC), pero **solo conserva la hora apagada si tiene batería** (conector
+"BAT" junto al USB-C). Sin batería, tras un corte de luz la hora queda
+atrasada hasta que haya internet: eso afecta la hora del historial de accesos
+y los permisos con **fecha de vencimiento**. Para un punto de acceso sin
+internet, instala la batería y ajusta la hora una vez:
+
+```bash
+sudo date -s "2026-11-26 13:50"    # hora local actual
+sudo hwclock --systohc              # guardarla en el reloj con batería
+```
+
+## systemd a mano (referencia)
 
 `/etc/systemd/system/proyectoc3.service`:
 

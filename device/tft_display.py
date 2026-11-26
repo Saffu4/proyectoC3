@@ -479,18 +479,30 @@ def build_display() -> TFTDisplay:
     return TFTDisplay(fb, touch)
 
 
-def start_in_thread() -> threading.Thread | None:
-    """Arranca la pantalla dentro del proceso del servicio (comparte la cámara)."""
-    try:
-        display = build_display()
-    except (TFTNotFoundError, OSError, RuntimeError) as exc:
-        print(f"[tft] Pantalla TFT no disponible: {exc}")
-        return None
-    t = threading.Thread(target=display.run, name="tft-display", daemon=True)
+def start_in_thread(wait_seconds: float = 120.0, retry_every: float = 3.0) -> threading.Thread:
+    """Arranca la pantalla dentro del proceso del servicio (comparte la cámara).
+
+    Al encender la Pi el servicio puede iniciar antes de que el driver de la
+    pantalla cree /dev/fbN: se reintenta hasta `wait_seconds` sin bloquear la API."""
+
+    def worker() -> None:
+        deadline = time.time() + wait_seconds
+        while True:
+            try:
+                display = build_display()
+                break
+            except (TFTNotFoundError, OSError, RuntimeError) as exc:
+                if time.time() >= deadline:
+                    print(f"[tft] Pantalla TFT no disponible: {exc}", flush=True)
+                    return
+                time.sleep(retry_every)
+        print(f"[tft] Vista de acceso en {display.fb.info.device} "
+              f"({display.fb.info.width}x{display.fb.info.height}), modo={display.mode}, "
+              f"tactil={display.touch.device if display.touch else 'no'}", flush=True)
+        display.run()
+
+    t = threading.Thread(target=worker, name="tft-display", daemon=True)
     t.start()
-    print(f"[tft] Vista de acceso en {display.fb.info.device} "
-          f"({display.fb.info.width}x{display.fb.info.height}), modo={display.mode}, "
-          f"tactil={display.touch.device if display.touch else 'no'}")
     return t
 
 

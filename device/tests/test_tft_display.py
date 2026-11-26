@@ -199,3 +199,28 @@ def test_swap_rb_corrige_colores(tmp_path, monkeypatch):
     img[:, :] = (0, 0, 255)  # rojo en BGR -> se envía como azul
     fb.show(img)
     assert struct.unpack_from("<H", Path(fb.info.device).read_bytes(), 0)[0] == 0x001F
+
+
+def test_arranque_espera_a_que_aparezca_la_pantalla(device_env, monkeypatch):
+    """Al encender, el driver puede tardar: start_in_thread reintenta."""
+    calls = {"n": 0}
+
+    class Ready:
+        class fb:
+            class info:
+                device, width, height = "/dev/fb1", 480, 320
+        mode, touch = "toque", None
+
+        def run(self):
+            calls["ran"] = True
+
+    def fake_build():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise tft_display.TFTNotFoundError("aún no")
+        return Ready()
+
+    monkeypatch.setattr(tft_display, "build_display", fake_build)
+    t = tft_display.start_in_thread(wait_seconds=5, retry_every=0.01)
+    t.join(2)
+    assert calls["n"] == 3 and calls.get("ran")

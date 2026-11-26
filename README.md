@@ -49,12 +49,12 @@ Documentación completa:
 | [docs/installation.md](docs/installation.md) | Instalación paso a paso en la Pi |
 | [docs/register-person.md](docs/register-person.md) | Registrar una persona |
 | [docs/revoke-permissions.md](docs/revoke-permissions.md) | Revocar/suspender permisos |
-| [docs/deployment-local.md](docs/deployment-local.md) | Despliegue local (autoarranque) |
+| [docs/deployment-local.md](docs/deployment-local.md) | Arranque automático al encender, sin internet |
 | [docs/remote-access.md](docs/remote-access.md) | Acceso remoto seguro (VPN) |
 | [docs/pantalla-tft.md](docs/pantalla-tft.md) | Pantalla táctil TFT 3.5" (ILI9486/XPT2046) en la Pi 5 |
 | [docs/security.md](docs/security.md) | Seguridad, retención y riesgos |
 | [docs/authorization-guide.md](docs/authorization-guide.md) | Calibración del umbral LBPH |
-| [device/tests/](device/tests/) | 94 pruebas automatizadas (`pytest device/tests`) |
+| [device/tests/](device/tests/) | 95 pruebas automatizadas (`pytest device/tests`) |
 
 ## Compatibilidad con el proyecto base
 
