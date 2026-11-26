@@ -33,6 +33,7 @@ node_modules/
 dist/
 .vite/
 *.local
+*.tsbuildinfo
 
 # --- IDE / sistema ---
 .vscode/

@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 
 from . import access_service
-from .face_recognizer import LBPHRecognizer, MatchResult, ModelUnavailableError
+from .face_recognizer import LBPHRecognizer, MatchResult, ModelUnavailableError, crop_face
 
 _COLOR_OK = (80, 220, 100)      # verde
 _COLOR_DENY = (80, 80, 230)     # rojo
@@ -61,7 +61,9 @@ def annotate_frame(
         color = _COLOR_MODEL
         if model_ok and w > 0 and h > 0:
             try:
-                match: MatchResult = recognizer.predict(annotated[y:y2, x:x2])
+                # mismo recorte (con margen) que en la captura; sobre el
+                # fotograma ORIGINAL para no incluir cajas ya dibujadas
+                match: MatchResult = recognizer.predict(crop_face(frame, (x, y, w, h)))
                 distance = match.distance
                 try:
                     decision = access_service.evaluate_identity(match)

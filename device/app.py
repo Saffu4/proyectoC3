@@ -18,7 +18,7 @@ from . import preview_overlay
 from .access_service import AccessDecision
 from .camera import CameraDisconnectedError
 from .face_detector import FaceDetector
-from .face_recognizer import ModelUnavailableError, get_recognizer, invalidate_shared
+from .face_recognizer import ModelUnavailableError, crop_face, get_recognizer, invalidate_shared
 
 # Panel web precompilado (device/webapp): TODO en la Pi, sin Node ni Vercel.
 WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
@@ -65,6 +65,19 @@ def log_audit(action: str, detail: str | None = None):
 def _body_json() -> dict:
     data = request.get_json(silent=True)
     return data if isinstance(data, dict) else {}
+
+
+def _int_arg(value, default: int, *, low: int, high: int, name: str) -> int:
+    """Convierte a entero acotado; ValueError con mensaje claro si no es número."""
+    if value is None or value == "":
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} debe ser un número entero") from None
+    if not low <= n <= high:
+        raise ValueError(f"{name} debe estar entre {low} y {high}")
+    return n
 
 
 def _uuid_or_400(value: str) -> str:
@@ -130,7 +143,9 @@ def login():
     password = str(body.get("password", ""))
     if not username or not password:
         return _error("username y password requeridos", 400, "bad_request")
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "-")
+    # NO usar X-Forwarded-For: el cliente puede inventarla y saltarse el
+    # límite de intentos. Si algún día hay un proxy delante, usar ProxyFix.
+    ip = request.remote_addr or "-"
     try:
         sess = auth.login(username, password, ip=ip)
     except PermissionError as exc:
@@ -246,7 +261,10 @@ def person_patch(person_id: str):
     body = _body_json()
     allowed = {"full_name", "document_id", "expires_at", "status"}
     updates = {k: v for k, v in body.items() if k in allowed}
-    if not updates:
+    roles = body.get("roles")
+    if roles is not None and (not isinstance(roles, list) or not all(isinstance(r, str) for r in roles)):
+        return _error("roles debe ser una lista de nombres", 400, "bad_request")
+    if not updates and roles is None:
         return _error("Nada para actualizar", 400, "bad_request")
     if "status" in updates and updates["status"] not in ("active", "suspended", "revoked"):
         return _error("status inválido", 400, "bad_request")
@@ -259,14 +277,15 @@ def person_patch(person_id: str):
         _uuid_or_400(person_id)
     except ValueError:
         return _error("id inválido", 400, "bad_request")
-    sets = ", ".join(f"{k}=?" for k in updates)
+    # updated_at se actualiza también si solo cambian los roles
+    sets = "".join(f"{k}=?, " for k in updates)
     values = list(updates.values()) + [db.utcnow_iso(), person_id]
-    n = db.execute(f"UPDATE people SET {sets}, updated_at = ? WHERE id = ?", tuple(values))  # type: ignore
+    n = db.execute(f"UPDATE people SET {sets}updated_at = ? WHERE id = ?", tuple(values))  # type: ignore
     if not n:
         return _error("Persona no encontrada", 404, "not_found")
-    if "roles" in body:
+    if roles is not None:
         role_rows = db.query("SELECT id, name FROM roles")
-        wanted = set(body["roles"])
+        wanted = set(roles)
         db.execute("DELETE FROM person_roles WHERE person_id = ?", (person_id,))
         for r in role_rows:
             if r["name"] in wanted:
@@ -274,7 +293,8 @@ def person_patch(person_id: str):
                     "INSERT OR IGNORE INTO person_roles (person_id, role_id) VALUES (?, ?)",
                     (person_id, r["id"]),
                 )
-    log_audit("person_update", f"id={person_id} fields={','.join(updates)}")
+    fields = list(updates) + (["roles"] if roles is not None else [])
+    log_audit("person_update", f"id={person_id} fields={','.join(fields)}")
     return jsonify({"ok": True})
 
 
@@ -322,9 +342,16 @@ def person_delete(person_id: str):
     saved = capture_service.delete_face_images(person_id)
     db.execute("DELETE FROM face_profiles WHERE person_id=?", (person_id,))
     db.execute("DELETE FROM people WHERE id=?", (person_id,))
+    # Reentrenar YA: el modelo no debe seguir conteniendo el rostro borrado.
     invalidate_shared()
-    log_audit("person_delete", f"id={person_id} images={saved}")
-    return jsonify({"ok": True, "face_images_deleted": saved})
+    retrained = True
+    try:
+        get_recognizer().train()
+    except ModelUnavailableError:
+        retrained = False  # nadie más tiene imágenes: el modelo queda vacío/borrado
+    invalidate_shared()
+    log_audit("person_delete", f"id={person_id} images={saved} retrained={retrained}")
+    return jsonify({"ok": True, "face_images_deleted": saved, "model_retrained": retrained})
 
 
 @app.post("/api/people/<person_id>/capture")
@@ -332,7 +359,10 @@ def person_delete(person_id: str):
 def person_capture(person_id: str):
     """Captura clásica (bloqueante). Si hay sesión interactiva activa, 409."""
     body = _body_json()
-    count = int(body.get("count", 10))
+    try:
+        count = _int_arg(body.get("count"), 10, low=1, high=50, name="count")
+    except ValueError as exc:
+        return _error(str(exc), 400, "bad_request")
     for ses in list(capture_session._registry.values()):
         if ses.status == "running":
             return _error("Hay una sesión de captura interactiva en curso", 409, "capture_busy")
@@ -351,7 +381,10 @@ def person_capture_session(person_id: str):
     """Inicia sesión INTERACTIVA con preview en vivo + contador + control de
     calidad (nitidez/luz/distancia). Devuelve session_id y token de preview."""
     body = _body_json()
-    target = int(body.get("count", 20))
+    try:
+        target = _int_arg(body.get("count"), 20, low=1, high=60, name="count")
+    except ValueError as exc:
+        return _error(str(exc), 400, "bad_request")
     rows = db.query("SELECT status FROM people WHERE id=?", (person_id,))
     if not rows:
         return _error("Persona no encontrada", 404, "not_found")
@@ -444,7 +477,10 @@ def person_train(person_id: str):
 @app.get("/api/access-events")
 @require_admin
 def access_events():
-    limit = max(1, min(int(request.args.get("limit", 50)), 500))
+    try:
+        limit = _int_arg(request.args.get("limit"), 50, low=1, high=500, name="limit")
+    except ValueError as exc:
+        return _error(str(exc), 400, "bad_request")
     return jsonify(event_service.recent(limit))
 
 
@@ -455,7 +491,10 @@ def access_events():
 def camera_stream_token():
     """Emite token efímero (10 min, solo lectura) para el <img> del panel.
     Falla pronto si la cámara está desconectada o no entrega frames."""
-    camera.get_source().read()
+    try:
+        camera.get_source().read()
+    except CameraDisconnectedError as exc:
+        return _error(str(exc), 503, "camera_disconnected")
     tok = auth.issue_stream_token()
     return jsonify({"token": tok, "ttl_seconds": auth.STREAM_TOKEN_TTL_SECONDS})
 
@@ -564,6 +603,11 @@ def roles_patch(role_id: int):
 # ------------------------------------------------------------------- settings
 
 
+# Claves que gestiona el propio sistema: editarlas a mano rompería garantías
+# (p. ej. last_policy_sync "refrescaría" una política vencida).
+PROTECTED_SETTINGS = {"device_id", "last_policy_sync", "model_label_counter"}
+
+
 @app.get("/api/settings")
 @require_admin
 def settings_get():
@@ -575,9 +619,13 @@ def settings_get():
 @require_admin
 def settings_patch():
     body = _body_json()
+    blocked = [k for k in body if k in PROTECTED_SETTINGS]
+    if blocked:
+        return _error(f"Claves protegidas, no editables: {', '.join(blocked)}", 400, "bad_request")
     for key, value in body.items():
-        if key in ("device_id",):  # protegido
-            continue
+        if not isinstance(key, str) or not key or len(key) > 64:
+            return _error("Clave de configuración inválida", 400, "bad_request")
+    for key, value in body.items():
         db.set_setting(key, str(value))
     log_audit("settings_update", ",".join(body.keys()))
     return jsonify({"ok": True})
@@ -621,8 +669,7 @@ def access_check():
             resp = jsonify({"category": "denied_unknown", "decision": False,
                             "message": "No se detectó ningún rostro"})
             return resp, 404
-        (x, y, w, h) = faces[0]
-        match = get_recognizer().predict(frame[y:y + h, x:x + w])
+        match = get_recognizer().predict(crop_face(frame, faces[0]))
         decision = access_service.decide_from_recognition(match)
     except ModelUnavailableError as exc:
         event_service.log_access(person_id=None, result="denied", reason=str(exc),
@@ -660,8 +707,7 @@ def kiosk_evaluate():
         if not faces:
             return jsonify({"category": "denied_unknown", "decision": False,
                             "message": "No se detectó ningún rostro"}), 404
-        (x, y, w, h) = faces[0]
-        match = get_recognizer().predict(frame[y:y + h, x:x + w])
+        match = get_recognizer().predict(crop_face(frame, faces[0]))
         decision = access_service.decide_from_recognition(match)
     except ModelUnavailableError as exc:
         event_service.log_access(person_id=None, result="denied", reason=str(exc),

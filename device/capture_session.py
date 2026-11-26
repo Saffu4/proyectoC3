@@ -17,7 +17,7 @@ import numpy as np
 
 from . import camera, config, db
 from .face_detector import FaceDetector
-from .face_recognizer import load_face_to_train
+from .face_recognizer import crop_face, load_face_to_train
 
 # Umbrales de calidad (calibles por env)
 BLUR_MIN = 60.0        # variancia del Laplaciano: menor = borroso
@@ -183,14 +183,9 @@ class CaptureSession:
         )
 
         if can_save:
-            (x, y, w, h) = rect
-            margen_x = int(w * config.FACE_MARGIN)
-            margen_y = int(h * config.FACE_MARGIN)
-            H, W = frame.shape[:2]
-            x1, y1 = max(0, x - margen_x), max(0, y - margen_y)
-            x2, y2 = min(W, x + w + margen_x), min(H, y + h + margen_y)
-            if x2 > x1 and y2 > y1:  # recorte nunca vacío
-                face_img = load_face_to_train(frame[y1:y2, x1:x2])
+            roi = crop_face(frame, rect)
+            if roi.size > 0:  # recorte nunca vacío
+                face_img = load_face_to_train(roi)
                 folder = config.faces_dir(self.person_id)
                 config.ensure_data_dirs()
                 folder.mkdir(parents=True, exist_ok=True)
